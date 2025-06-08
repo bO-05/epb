@@ -254,106 +254,82 @@ If you're creating a complete application:
         print(f"Error in generate_code_with_mistral: {str(e)}")
         raise
 
-def create_github_pr(instruction, files):
-    """Create a GitHub PR with the generated files"""
-    try:
-        headers = {
-            "Authorization": f"token {os.environ.get('GITHUB_TOKEN')}",
-            "Accept": "application/vnd.github.v3+json"
+def create_github_pr(instruction: str, files: dict[str, str]):
+    """
+    Create a GitHub branch + commit the AI-generated files + open PR.
+
+    Fixes the 422 “sha wasn’t supplied” error by always fetching the
+    current SHA of a file that already exists on the default branch.
+    """
+    headers = {
+        "Authorization": f"token {os.environ['GITHUB_TOKEN']}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    repo      = os.environ["GITHUB_REPO"]          # owner/repo
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    branch    = f"email-pr-{timestamp}"
+
+    # --- get default branch + base SHA ---------------------------------
+    repo_json   = requests.get(f"https://api.github.com/repos/{repo}", headers=headers).json()
+    default     = repo_json.get("default_branch", "main")
+    base_sha    = requests.get(
+        f"https://api.github.com/repos/{repo}/git/refs/heads/{default}",
+        headers=headers
+    ).json()["object"]["sha"]
+
+    # --- create branch -------------------------------------------------
+    requests.post(
+        f"https://api.github.com/repos/{repo}/git/refs",
+        headers=headers,
+        json={"ref": f"refs/heads/{branch}", "sha": base_sha},
+    ).raise_for_status()
+
+    # --- commit each file ---------------------------------------------
+    for path, content in files.items():
+        # Skip giant or forbidden files
+        if path.lower() in {"license", "license.md"}:
+            continue
+
+        b64 = base64.b64encode(content.encode()).decode()
+
+        # Does the file already exist on *default* branch?
+        sha = None
+        head = requests.get(
+            f"https://api.github.com/repos/{repo}/contents/{path}?ref={default}",
+            headers=headers,
+        )
+        if head.status_code == 200:
+            sha = head.json()["sha"]
+
+        body = {
+            "message": f"Add/update {path} via email instruction",
+            "content": b64,
+            "branch": branch,
         }
-        
-        repo = os.environ.get('GITHUB_REPO')
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        branch_name = f"email-pr-{timestamp}"
-        
-        print(f"Creating PR in repo: {repo}, branch: {branch_name}")
-        
-        # Get default branch
-        repo_response = requests.get(
-            f"https://api.github.com/repos/{repo}",
-            headers=headers
-        )
-        
-        if repo_response.status_code != 200:
-            raise Exception(f"GitHub API error getting repo: {repo_response.status_code} - {repo_response.text}")
-            
-        repo_data = repo_response.json()
-        default_branch = repo_data.get('default_branch', 'main')
-        
-        # Get latest commit SHA
-        ref_response = requests.get(
-            f"https://api.github.com/repos/{repo}/git/refs/heads/{default_branch}",
-            headers=headers
-        )
-        
-        if ref_response.status_code != 200:
-            raise Exception(f"GitHub API error getting ref: {ref_response.status_code} - {ref_response.text}")
-            
-        base_sha = ref_response.json()["object"]["sha"]
-        
-        # Create new branch
-        branch_response = requests.post(
-            f"https://api.github.com/repos/{repo}/git/refs",
+        if sha:
+            body["sha"] = sha                           # <-- important!
+
+        put = requests.put(
+            f"https://api.github.com/repos/{repo}/contents/{path}",
             headers=headers,
-            json={
-                "ref": f"refs/heads/{branch_name}",
-                "sha": base_sha
-            }
+            json=body,
         )
-        
-        if branch_response.status_code != 201:
-            raise Exception(f"GitHub API error creating branch: {branch_response.status_code} - {branch_response.text}")
-        
-        # Create files in the new branch
-        for filepath, content in files.items():
-            print(f"Creating file: {filepath}")
-            encoded_content = base64.b64encode(content.encode()).decode()
-            
-            file_response = requests.put(
-                f"https://api.github.com/repos/{repo}/contents/{filepath}",
-                headers=headers,
-                json={
-                    "message": f"Add {filepath} via email request",
-                    "content": encoded_content,
-                    "branch": branch_name
-                }
-            )
-            
-            if file_response.status_code not in [200, 201]:
-                raise Exception(f"GitHub API error creating file {filepath}: {file_response.status_code} - {file_response.text}")
-        
-        # Create pull request
-        pr_response = requests.post(
-            f"https://api.github.com/repos/{repo}/pulls",
-            headers=headers,
-            json={
-                "title": f"[Email] {instruction[:60]}{'...' if len(instruction) > 60 else ''}",
-                "body": f"""## 📧 Email-Generated PR
+        if put.status_code not in (200, 201):
+            raise RuntimeError(f"GitHub error {path}: {put.status_code} – {put.text}")
 
-**Request:** {instruction}
+    # --- open PR -------------------------------------------------------
+    pr = requests.post(
+        f"https://api.github.com/repos/{repo}/pulls",
+        headers=headers,
+        json={
+            "title": f"[Email] {instruction[:60]}{'...' if len(instruction) > 60 else ''}",
+            "body":  f"Generated from email:\n\n> {instruction}",
+            "head":  branch,
+            "base":  default,
+        },
+    ).json()
 
-**Generated by:** Mistral AI (codestral-latest)
-**Files changed:** {len(files)}
-
----
-
-This PR was automatically generated based on an email request.
-The AI reviewer will analyze the changes shortly.""",
-                "head": branch_name,
-                "base": default_branch
-            }
-        )
-        
-        if pr_response.status_code != 201:
-            raise Exception(f"GitHub API error creating PR: {pr_response.status_code} - {pr_response.text}")
-        
-        pr_data = pr_response.json()
-        print(f"PR created successfully: {pr_data['html_url']}")
-        return pr_data["html_url"], pr_data["number"]
-        
-    except Exception as e:
-        print(f"Error in create_github_pr: {str(e)}")
-        raise
+    return pr["html_url"], pr["number"]
 
 def send_email_response(to_email, pr_url, original_subject):
     """Send success response via Postmark"""
@@ -380,7 +356,7 @@ def send_email_response(to_email, pr_url, original_subject):
                 "Content-Type": "application/json"
             },
             json={
-                "From": "icarus@hidrokultur.com",  # YOUR VERIFIED EMAIL!
+                "From": "icarus@hidrokultur.com",  
                 "To": to_email,
                 "Subject": f"Re: {original_subject}",
                 "HtmlBody": html_body,
@@ -397,7 +373,19 @@ def send_email_response(to_email, pr_url, original_subject):
 def send_error_email(to_email, error_message, original_subject):
     """Send error notification"""
     try:
-        # ... (html_body code stays the same)
+        html_body = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: #ff0000; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+                <h2 style="margin: 0;">❌ Error Processing Request</h2>
+            </div>
+            <div style="padding: 20px; background: #f5f5f5;">
+                <div style="background: white; padding: 20px; border-radius: 8px;">
+                    <p><strong>Error:</strong></p>
+                    <pre style="background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto;">{error_message}</pre>
+                </div>
+            </div>
+        </div>
+        """
         
         requests.post(
             "https://api.postmarkapp.com/email",
