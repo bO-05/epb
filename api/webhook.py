@@ -94,31 +94,20 @@ def process_email(data):
         if not text_body.strip():
             return {"status": "ignored", "reason": "empty body"}
         
-        # For now, just return success to test the webhook
-        # Comment out the actual processing until webhook works
+        # Generate code using Mistral
+        files = generate_code_with_mistral(text_body)
+        
+        # Create GitHub PR
+        pr_url = create_github_pr(text_body, files)[0]
+        
+        # Send response email
+        send_email_response(from_email, pr_url, subject)
+        
         return {
             "status": "success",
-            "message": "Webhook received",
-            "from": from_email,
-            "subject": subject,
-            "body_length": len(text_body)
+            "pr_url": pr_url,
+            "files_created": len(files)
         }
-        
-        # Uncomment below when webhook is working
-        # # Generate code using Mistral
-        # files = generate_code_with_mistral(text_body)
-        # 
-        # # Create GitHub PR
-        # pr_url, pr_number = create_github_pr(text_body, files)
-        # 
-        # # Send response email
-        # send_email_response(from_email, pr_url, subject)
-        # 
-        # return {
-        #     "status": "success",
-        #     "pr_url": pr_url,
-        #     "files_created": len(files)
-        # }
         
     except Exception as e:
         print(f"Error in process_email: {str(e)}")
