@@ -341,6 +341,11 @@ The AI reviewer will analyze the changes shortly.""",
 def send_email_response(to_email, pr_url, original_subject):
     """Send success response via Postmark"""
     try:
+        # Ensure we have a valid recipient email
+        if not to_email or '@' not in to_email:
+            print(f"Invalid recipient email: {to_email}")
+            return
+            
         html_body = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: #0070f3; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
@@ -356,26 +361,44 @@ def send_email_response(to_email, pr_url, original_subject):
         </div>
         """
         
+        # Prepare the email payload
+        email_payload = {
+            "From": "icarus@hidrokultur.com", 
+            "To": to_email,
+            "Subject": f"Re: {original_subject}",
+            "HtmlBody": html_body,
+            "MessageStream": "outbound" 
+        }
+        
+        print(f"Sending email with payload: {json.dumps(email_payload, indent=2)}")
+        
         response = requests.post(
             "https://api.postmarkapp.com/email",
             headers={
                 "X-Postmark-Server-Token": os.environ.get('POSTMARK_SERVER_TOKEN'),
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Accept": "application/json"
             },
-            json={
-                "From": "icarus@hidrokultur.com",
-                "To": to_email,
-                "Subject": f"Re: {original_subject}",
-                "HtmlBody": html_body,
-                "MessageStream": "outbound"
-            }
+            json=email_payload
         )
         
+        # Log the response for debugging
+        print(f"Postmark response status: {response.status_code}")
+        print(f"Postmark response body: {response.text}")
+        
+        if response.status_code == 422:
+            error_data = response.json()
+            print(f"Postmark 422 error details: {error_data}")
+            # Don't raise - PR was created successfully
+            return
+            
         response.raise_for_status()
         print(f"Email sent successfully to {to_email}")
         
     except Exception as e:
         print(f"Error in send_email_response: {str(e)}")
+        print(f"PR was still created successfully: {pr_url}")
+        # Don't raise - let the webhook succeed
 
 def send_error_email(to_email, error_message, original_subject):
     """Send error notification"""
