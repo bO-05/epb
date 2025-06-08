@@ -109,14 +109,12 @@ def process_email(data):
         
         print(f"Processing email - From: {from_email}, Subject: {subject}, MessageID: {message_id}")
         
-        # Validate we have minimum required data
         if not from_email:
             return {"status": "error", "reason": "No sender email found"}
             
         if not text_body.strip():
             return {"status": "ignored", "reason": "Empty email body"}
         
-        # Check environment variables
         required_vars = ['GITHUB_REPO', 'GITHUB_TOKEN', 'MISTRAL_API_KEY', 'POSTMARK_SERVER_TOKEN']
         missing_vars = [var for var in required_vars if not os.environ.get(var)]
         
@@ -171,9 +169,8 @@ def generate_code_with_mistral(instruction):
             "Content-Type": "application/json"
         }
         
-        # Using the correct model name from Mistral's current lineup
         payload = {
-            "model": "codestral-latest",  # Updated model name
+            "model": "codestral-latest",
             "messages": [
                 {
                     "role": "system",
@@ -355,15 +352,6 @@ def send_email_response(to_email, pr_url, original_subject):
                     <h3 style="margin-top: 0;">Your PR is ready:</h3>
                     <a href="{pr_url}" style="display: inline-block; background: #0070f3; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">View Pull Request</a>
                 </div>
-                
-                <div style="background: white; padding: 20px; border-radius: 8px;">
-                    <h4 style="margin-top: 0;">What happens next?</h4>
-                    <ul style="color: #666;">
-                        <li>The AI reviewer will analyze your code</li>
-                        <li>You'll see comments and suggestions on the PR</li>
-                        <li>Review and merge when ready</li>
-                    </ul>
-                </div>
             </div>
         </div>
         """
@@ -375,7 +363,7 @@ def send_email_response(to_email, pr_url, original_subject):
                 "Content-Type": "application/json"
             },
             json={
-                "From": "ai-coder@postmarkapp.com",
+                "From": "icarus@hidrokultur.com",
                 "To": to_email,
                 "Subject": f"Re: {original_subject}",
                 "HtmlBody": html_body,
@@ -383,14 +371,11 @@ def send_email_response(to_email, pr_url, original_subject):
             }
         )
         
-        if response.status_code != 200:
-            raise Exception(f"Postmark API error: {response.status_code} - {response.text}")
-            
+        response.raise_for_status()
         print(f"Email sent successfully to {to_email}")
         
     except Exception as e:
         print(f"Error in send_email_response: {str(e)}")
-        raise
 
 def send_error_email(to_email, error_message, original_subject):
     """Send error notification"""
@@ -416,7 +401,7 @@ def send_error_email(to_email, error_message, original_subject):
                 "Content-Type": "application/json"
             },
             json={
-                "From": "ai-coder@postmarkapp.com",
+                "From": "icarus@hidrokultur.com",
                 "To": to_email,
                 "Subject": f"Re: {original_subject} (Error)",
                 "HtmlBody": html_body,
@@ -424,4 +409,4 @@ def send_error_email(to_email, error_message, original_subject):
             }
         )
     except:
-        pass  # Don't raise errors from error handler
+        pass 
