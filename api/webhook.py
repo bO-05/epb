@@ -34,6 +34,16 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
                 return
             
+            # Check if this is a test webhook from Postmark
+            if self.is_test_webhook(data):
+                # For test webhooks, just return 200 OK
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok", "message": "Test webhook received"}).encode())
+                return
+            
+            # Process real email
             result = process_email(data)
             
             self.send_response(200)
@@ -51,7 +61,29 @@ class handler(BaseHTTPRequestHandler):
             error_response = {"error": str(e), "type": type(e).__name__}
             self.wfile.write(json.dumps(error_response).encode())
     
+    def is_test_webhook(self, data):
+        """Check if this is a test webhook from Postmark"""
+        # Postmark test webhooks have specific characteristics
+        # They often have minimal data or specific test patterns
+        
+        # Check for common test webhook indicators
+        if not data:
+            return True
+            
+        # If it's missing critical fields, it's likely a test
+        if 'From' not in data and 'FromFull' not in data:
+            return True
+            
+        # Postmark's "Check" button sends a minimal test payload
+        # Real emails always have these fields
+        required_fields = ['From', 'Subject', 'MessageID']
+        if not all(field in data for field in required_fields):
+            return True
+            
+        return False
+    
     def do_GET(self):
+        # Health check endpoint
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
@@ -60,53 +92,76 @@ class handler(BaseHTTPRequestHandler):
 def process_email(data):
     """Process incoming email from Postmark"""
     try:
-        # Extract email fields
+        # Extract email fields safely
         from_full = data.get('FromFull', {})
         from_email = from_full.get('Email', '') if isinstance(from_full, dict) else ''
         
+        # Fallback to From field if FromFull is not present
         if not from_email:
             from_email = data.get('From', '')
-            
+            # Extract email from "Name <email@domain.com>" format
+            if '<' in from_email and '>' in from_email:
+                from_email = from_email.split('<')[1].split('>')[0]
+        
         subject = data.get('Subject', '')
         text_body = data.get('StrippedTextReply') or data.get('TextBody', '')
+        message_id = data.get('MessageID', '')
         
-        print(f"Processing email from: {from_email}, subject: {subject}")
+        print(f"Processing email - From: {from_email}, Subject: {subject}, MessageID: {message_id}")
+        
+        # Validate we have minimum required data
+        if not from_email:
+            return {"status": "error", "reason": "No sender email found"}
+            
+        if not text_body.strip():
+            return {"status": "ignored", "reason": "Empty email body"}
         
         # Check environment variables
         required_vars = ['GITHUB_REPO', 'GITHUB_TOKEN', 'MISTRAL_API_KEY', 'POSTMARK_SERVER_TOKEN']
         missing_vars = [var for var in required_vars if not os.environ.get(var)]
         
         if missing_vars:
-            raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
-        
-        if not text_body.strip():
-            return {"status": "ignored", "reason": "empty body"}
+            error_msg = f"Missing environment variables: {', '.join(missing_vars)}"
+            print(f"Error: {error_msg}")
+            # Still return 200 to Postmark, but log the error
+            return {"status": "error", "reason": error_msg}
         
         # Generate code using Mistral
+        print(f"Calling Mistral AI with instruction: {text_body[:100]}...")
         files = generate_code_with_mistral(text_body)
         
         # Create GitHub PR
+        print(f"Creating GitHub PR with {len(files)} files...")
         pr_url, pr_number = create_github_pr(text_body, files)
         
         # Send response email
+        print(f"Sending response email to {from_email}...")
         send_email_response(from_email, pr_url, subject)
         
         return {
             "status": "success",
             "pr_url": pr_url,
-            "files_created": len(files)
+            "files_created": len(files),
+            "recipient": from_email
         }
         
     except Exception as e:
         print(f"Error in process_email: {str(e)}")
         print(traceback.format_exc())
-        # Try to send error email
+        
+        # Try to send error notification
         try:
             if 'from_email' in locals() and from_email:
                 send_error_email(from_email, str(e), subject if 'subject' in locals() else "Error")
         except:
             pass
-        raise
+            
+        # Return error but with 200 status to prevent Postmark retries
+        return {
+            "status": "error",
+            "reason": str(e),
+            "type": type(e).__name__
+        }
 
 def generate_code_with_mistral(instruction):
     """Generate code using Mistral AI"""
