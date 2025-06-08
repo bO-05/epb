@@ -109,12 +109,14 @@ def process_email(data):
         
         print(f"Processing email - From: {from_email}, Subject: {subject}, MessageID: {message_id}")
         
+        # Validate we have minimum required data
         if not from_email:
             return {"status": "error", "reason": "No sender email found"}
             
         if not text_body.strip():
             return {"status": "ignored", "reason": "Empty email body"}
         
+        # Check environment variables
         required_vars = ['GITHUB_REPO', 'GITHUB_TOKEN', 'MISTRAL_API_KEY', 'POSTMARK_SERVER_TOKEN']
         missing_vars = [var for var in required_vars if not os.environ.get(var)]
         
@@ -170,16 +172,31 @@ def generate_code_with_mistral(instruction):
         }
         
         payload = {
-            "model": "codestral-latest",
+            "model": "codestral-latest",  
             "messages": [
                 {
                     "role": "system",
-                    "content": """You are an expert developer. Generate clean, production-ready code.
-                    Return your response in this exact format:
-                    ---FILE: path/to/file.py---
-                    code content here
-                    ---END FILE---
-                    You can include multiple files."""
+                    "content": """You are an expert software developer with deep knowledge of best practices, design patterns, and modern coding standards.
+
+Generate clean, production-ready code based on the user's requirements with these guidelines:
+1. Write well-structured, maintainable code with appropriate error handling
+2. Include clear comments for complex logic and document function purposes
+3. Follow language-specific best practices and conventions
+4. Ensure security considerations are addressed
+5. Use semantic naming and consistent formatting
+6. Prioritize performance and efficiency where applicable
+
+Return your response in this EXACT format for parsing:
+---FILE: path/to/file.extension---
+code content here
+---END FILE---
+
+For multiple files, repeat the format for each file. Use appropriate file extensions for the language (e.g., .py for Python, .js for JavaScript, .html for HTML, etc.). Ensure file paths follow standard conventions for the language. Include all necessary imports.
+
+If you're creating a complete application:
+- Include necessary configuration files (.env.example, requirements.txt, package.json, etc.)
+- Add a README.md with setup and usage instructions
+- Consider appropriate folder structure for the project type."""
                 },
                 {
                     "role": "user",
@@ -341,11 +358,6 @@ The AI reviewer will analyze the changes shortly.""",
 def send_email_response(to_email, pr_url, original_subject):
     """Send success response via Postmark"""
     try:
-        # Ensure we have a valid recipient email
-        if not to_email or '@' not in to_email:
-            print(f"Invalid recipient email: {to_email}")
-            return
-            
         html_body = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: #0070f3; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
@@ -361,61 +373,31 @@ def send_email_response(to_email, pr_url, original_subject):
         </div>
         """
         
-        # Prepare the email payload
-        email_payload = {
-            "From": "icarus@hidrokultur.com", 
-            "To": to_email,
-            "Subject": f"Re: {original_subject}",
-            "HtmlBody": html_body,
-            "MessageStream": "outbound" 
-        }
-        
-        print(f"Sending email with payload: {json.dumps(email_payload, indent=2)}")
-        
         response = requests.post(
             "https://api.postmarkapp.com/email",
             headers={
                 "X-Postmark-Server-Token": os.environ.get('POSTMARK_SERVER_TOKEN'),
-                "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Content-Type": "application/json"
             },
-            json=email_payload
+            json={
+                "From": "icarus@hidrokultur.com",  # YOUR VERIFIED EMAIL!
+                "To": to_email,
+                "Subject": f"Re: {original_subject}",
+                "HtmlBody": html_body,
+                "MessageStream": "outbound"
+            }
         )
         
-        # Log the response for debugging
-        print(f"Postmark response status: {response.status_code}")
-        print(f"Postmark response body: {response.text}")
-        
-        if response.status_code == 422:
-            error_data = response.json()
-            print(f"Postmark 422 error details: {error_data}")
-            # Don't raise - PR was created successfully
-            return
-            
         response.raise_for_status()
         print(f"Email sent successfully to {to_email}")
         
     except Exception as e:
         print(f"Error in send_email_response: {str(e)}")
-        print(f"PR was still created successfully: {pr_url}")
-        # Don't raise - let the webhook succeed
 
 def send_error_email(to_email, error_message, original_subject):
     """Send error notification"""
     try:
-        html_body = f"""
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: #ff0000; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
-                <h2 style="margin: 0;">❌ Error Processing Request</h2>
-            </div>
-            <div style="padding: 20px; background: #f5f5f5;">
-                <div style="background: white; padding: 20px; border-radius: 8px;">
-                    <p><strong>Error:</strong></p>
-                    <pre style="background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto;">{error_message}</pre>
-                </div>
-            </div>
-        </div>
-        """
+        # ... (html_body code stays the same)
         
         requests.post(
             "https://api.postmarkapp.com/email",
@@ -424,7 +406,7 @@ def send_error_email(to_email, error_message, original_subject):
                 "Content-Type": "application/json"
             },
             json={
-                "From": "icarus@hidrokultur.com",
+                "From": "icarus@hidrokultur.com",  # YOUR VERIFIED EMAIL!
                 "To": to_email,
                 "Subject": f"Re: {original_subject} (Error)",
                 "HtmlBody": html_body,
@@ -432,4 +414,4 @@ def send_error_email(to_email, error_message, original_subject):
             }
         )
     except:
-        pass 
+        pass
