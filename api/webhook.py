@@ -1,34 +1,65 @@
 import os
 import json
-import time
 import requests
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 import base64
+import traceback
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path != '/api/webhook':
-            self.send_response(404)
-            self.end_headers()
-            return
-            
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length)
-        
         try:
-            data = json.loads(post_data)
+            # Log the incoming request path
+            print(f"Received POST request to: {self.path}")
+            
+            if self.path != '/api/webhook':
+                self.send_response(404)
+                self.end_headers()
+                return
+            
+            # Read the request body
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length == 0:
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"error": "Empty request body"}')
+                return
+                
+            post_data = self.rfile.read(content_length)
+            print(f"Received data: {post_data.decode()[:500]}...")  # Log first 500 chars
+            
+            # Parse JSON
+            try:
+                data = json.loads(post_data)
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error: {e}")
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+                return
+            
+            # Process the email
             result = process_email(data)
             
+            # Send success response
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+            
         except Exception as e:
+            # Log the full error
+            print(f"Error in webhook handler: {str(e)}")
+            print(traceback.format_exc())
+            
+            # Send 500 error response
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
+            error_response = {"error": str(e), "type": type(e).__name__}
+            self.wfile.write(json.dumps(error_response).encode())
     
     def do_GET(self):
         # Health check endpoint
@@ -39,32 +70,60 @@ class handler(BaseHTTPRequestHandler):
 
 def process_email(data):
     """Process incoming email from Postmark"""
-    from_email = data.get('FromFull', {}).get('Email', '')
-    subject = data.get('Subject', '')
-    text_body = data.get('StrippedTextReply') or data.get('TextBody', '')
-    
-    if not text_body.strip():
-        return {"status": "ignored", "reason": "empty body"}
-    
     try:
-        # Generate code using Mistral
-        files = generate_code_with_mistral(text_body)
+        # Safely extract email fields
+        from_full = data.get('FromFull', {})
+        from_email = from_full.get('Email', '') if isinstance(from_full, dict) else ''
         
-        # Create GitHub PR
-        pr_url, pr_number = create_github_pr(text_body, files)
+        # If FromFull is not present, try From field
+        if not from_email:
+            from_email = data.get('From', '')
+            
+        subject = data.get('Subject', '')
+        text_body = data.get('StrippedTextReply') or data.get('TextBody', '')
         
-        # Send response email immediately
-        send_email_response(from_email, pr_url, subject)
+        print(f"Processing email from: {from_email}, subject: {subject}")
         
+        # Check if we have required environment variables
+        required_vars = ['GITHUB_REPO', 'GITHUB_TOKEN', 'MISTRAL_API_KEY', 'POSTMARK_SERVER_TOKEN']
+        missing_vars = [var for var in required_vars if not os.environ.get(var)]
+        
+        if missing_vars:
+            raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
+        
+        if not text_body.strip():
+            return {"status": "ignored", "reason": "empty body"}
+        
+        # For now, just return success to test the webhook
+        # Comment out the actual processing until webhook works
         return {
             "status": "success",
-            "pr_url": pr_url,
-            "files_created": len(files)
+            "message": "Webhook received",
+            "from": from_email,
+            "subject": subject,
+            "body_length": len(text_body)
         }
+        
+        # Uncomment below when webhook is working
+        # # Generate code using Mistral
+        # files = generate_code_with_mistral(text_body)
+        # 
+        # # Create GitHub PR
+        # pr_url, pr_number = create_github_pr(text_body, files)
+        # 
+        # # Send response email
+        # send_email_response(from_email, pr_url, subject)
+        # 
+        # return {
+        #     "status": "success",
+        #     "pr_url": pr_url,
+        #     "files_created": len(files)
+        # }
+        
     except Exception as e:
-        # Send error email
-        send_error_email(from_email, str(e), subject)
-        raise e
+        print(f"Error in process_email: {str(e)}")
+        print(traceback.format_exc())
+        raise
 
 def generate_code_with_mistral(instruction):
     """Generate code using Mistral AI"""
