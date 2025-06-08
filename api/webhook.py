@@ -337,6 +337,8 @@ def process_email(data):
 def generate_code_with_mistral(instruction, repo_context=""):
     """Enhanced code generation with repository context"""
     try:
+        import re  # Move the import to the top of the function
+        
         headers = {
             "Authorization": f"Bearer {os.environ.get('MISTRAL_API_KEY')}",
             "Content-Type": "application/json"
@@ -430,7 +432,6 @@ IMPORTANT: Do NOT include markdown formatting symbols like triple backticks (```
         # Handle case where no files were parsed properly
         if not files:
             # Try to extract code blocks
-            import re
             code_blocks = re.findall(r'```(?:[\w-]+)?\n(.*?)\n```', content, re.DOTALL)
             if code_blocks:
                 # Get filename from content or generate default
