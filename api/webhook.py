@@ -377,7 +377,9 @@ Return your response in this EXACT format for parsing:
 code content here
 ---END FILE---
 
-For multiple files, repeat the format for each file. Ensure file paths follow the project's existing structure."""
+For multiple files, repeat the format for each file. Ensure file paths follow the project's existing structure.
+
+IMPORTANT: Do NOT include markdown formatting symbols like triple backticks (```) or language identifiers in the actual code content."""
 
         payload = {
             "model": "codestral-latest",
@@ -429,24 +431,34 @@ For multiple files, repeat the format for each file. Ensure file paths follow th
         if not files:
             # Try to extract code blocks
             import re
-            code_blocks = re.findall(r'```(?:python|py)?\n(.*?)\n```', content, re.DOTALL)
+            code_blocks = re.findall(r'```(?:[\w-]+)?\n(.*?)\n```', content, re.DOTALL)
             if code_blocks:
-                files = {"generated_code.py": code_blocks[0]}
+                # Get filename from content or generate default
+                filename_match = re.search(r'(?:[\w-]+\.[\w-]+)', content.split('\n')[0])
+                filename = filename_match.group(0) if filename_match else "generated_code.py"
+                files = {filename: code_blocks[0]}
             else:
                 files = {"generated_code.py": content}
         
-        # Filter out unwanted files
-        filtered_files = {}
+        # Clean up any markdown formatting in code content
+        cleaned_files = {}
         for filepath, file_content in files.items():
-            # Skip certain files unless specifically requested
+            # Strip markdown code block indicators if present
+            cleaned_content = file_content
+            # Remove leading ```language and trailing ``` if they exist
+            cleaned_content = re.sub(r'^```[\w-]*\n', '', cleaned_content)
+            cleaned_content = re.sub(r'\n```$', '', cleaned_content)
+            
+            # Filter out unwanted files
             filename = filepath.split('/')[-1].lower()
             if filename in ['readme.md', 'license', 'license.md', '.gitignore'] and len(files) > 1:
                 print(f"Skipping auto-generated file: {filepath}")
                 continue
-            filtered_files[filepath] = file_content
+                
+            cleaned_files[filepath] = cleaned_content
         
-        print(f"Parsed {len(filtered_files)} files from Mistral response")
-        return filtered_files
+        print(f"Parsed and cleaned {len(cleaned_files)} files from Mistral response")
+        return cleaned_files
         
     except Exception as e:
         print(f"Error in generate_code_with_mistral: {str(e)}")
